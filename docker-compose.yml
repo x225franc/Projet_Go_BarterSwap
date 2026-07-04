@@ -1,0 +1,30 @@
+services:
+  db:
+    image: mysql:8.0 
+    container_name: barterswap_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: barterswap_db
+      MYSQL_USER: barteruser
+      MYSQL_PASSWORD: root
+    ports:
+      - "3306:3306" 
+    volumes:
+      - db_data:/var/lib/mysql
+
+  api:
+    build: .
+    container_name: barterswap_api
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    environment:
+      DB_HOST: db 
+      DB_PORT: 3306
+      DB_USER: barteruser
+      DB_PASSWORD: root
+      DB_NAME: barterswap_db
+
+volumes:
+  db_data:
