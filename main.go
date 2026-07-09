@@ -31,6 +31,19 @@ type Skill struct {
 	Niveau string `json:"niveau"`
 }
 
+type Service struct {
+	ID           int    `json:"id"`
+	ProviderID   int    `json:"provider_id"`
+	Titre        string `json:"titre"`
+	Description  string `json:"description,omitempty"`
+	Categorie    string `json:"categorie"`
+	DureeMinutes int    `json:"duree_minutes"` 
+	Credits      int    `json:"credits"`       
+	Ville        string `json:"ville,omitempty"`
+	Actif        bool   `json:"actif"`
+	CreatedAt    string `json:"created_at"`
+}
+
 // FONCTION PRINCIPALE
 
 func main() {
@@ -46,6 +59,13 @@ func main() {
 	mux.HandleFunc("PUT /api/users/{id}", handleUpdateUser)
 	mux.HandleFunc("GET /api/users/{id}/skills", handleGetSkills)
 	mux.HandleFunc("PUT /api/users/{id}/skills", handleUpdateSkills)
+
+	// Routes Services
+	mux.HandleFunc("POST /api/services", handleCreateService)
+	mux.HandleFunc("GET /api/services", handleGetServices)
+	mux.HandleFunc("GET /api/services/{id}", handleGetService)
+	mux.HandleFunc("PUT /api/services/{id}", handleUpdateService)
+	mux.HandleFunc("DELETE /api/services/{id}", handleDeleteService)
 
 	fmt.Println("Serveur démarré sur http://localhost:8080")
 	err := http.ListenAndServe(":8080", mux)
@@ -108,6 +128,26 @@ func createTables() {
 	if err != nil {
 		log.Fatal("Erreur création table skills:", err)
 	}
+
+	// Table services
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS services (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			provider_id INT NOT NULL,
+			titre VARCHAR(255) NOT NULL,
+			description TEXT,
+			categorie VARCHAR(100) NOT NULL,
+			duree_minutes INT NOT NULL,
+			credits INT NOT NULL,
+			ville VARCHAR(100),
+			actif BOOLEAN DEFAULT TRUE,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (provider_id) REFERENCES users(id) ON DELETE CASCADE
+		)
+	`)
+	if err != nil {
+		log.Fatal("Erreur création table services:", err)
+	}
 }
 
 // HANDLERS HTTP UTILISATEURS
@@ -153,7 +193,6 @@ func handleGetUser(w http.ResponseWriter, r *http.Request) {
 	u.Bio = bio.String
 	u.Ville = ville.String
 	u.CreatedAt = string(createdAt)
-
 	u.Skills = getSkillsForUser(id)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -226,6 +265,175 @@ func handleUpdateSkills(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"message": "Compétences mises à jour"}`))
 }
 
+// HANDLERS HTTP SERVICES
+
+func handleCreateService(w http.ResponseWriter, r *http.Request) {
+	providerID := r.Header.Get("X-User-ID")
+	if providerID == "" {
+		http.Error(w, `{"error": "Authentification requise (X-User-ID manquant)"}`, http.StatusUnauthorized)
+		return
+	}
+
+	var s Service
+	err := json.NewDecoder(r.Body).Decode(&s)
+	if err != nil || s.Titre == "" || s.Categorie == "" {
+		http.Error(w, `{"error": "Données invalides (titre et catégorie obligatoires)"}`, http.StatusBadRequest)
+		return
+	}
+
+	if !isValidCategory(s.Categorie) {
+		http.Error(w, `{"error": "Catégorie non reconnue"}`, http.StatusBadRequest)
+		return
+	}
+
+	query := `INSERT INTO services (provider_id, titre, description, categorie, duree_minutes, credits, ville, actif) 
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	
+	s.Actif = true
+
+	result, err := db.Exec(query, providerID, s.Titre, s.Description, s.Categorie, s.DureeMinutes, s.Credits, s.Ville, s.Actif)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur lors de la création du service"}`, http.StatusInternalServerError)
+		return
+	}
+
+	newID, _ := result.LastInsertId()
+	s.ID = int(newID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(s)
+}
+
+func handleGetServices(w http.ResponseWriter, r *http.Request) {
+	query := `SELECT id, provider_id, titre, description, categorie, duree_minutes, credits, ville, actif, created_at 
+	          FROM services WHERE 1=1`
+	var args []any
+
+	cat := r.URL.Query().Get("categorie")
+	if cat != "" {
+		query += " AND categorie = ?"
+		args = append(args, cat)
+	}
+
+	ville := r.URL.Query().Get("ville")
+	if ville != "" {
+		query += " AND ville = ?"
+		args = append(args, ville)
+	}
+
+	search := r.URL.Query().Get("search")
+	if search != "" {
+		query += " AND (titre LIKE ? OR description LIKE ?)"
+		likeTerm := "%" + search + "%"
+		args = append(args, likeTerm, likeTerm)
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur lors de la récupération des services"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var services []Service
+	for rows.Next() {
+		var s Service
+		var desc, ville sql.NullString
+		var createdAt []byte
+
+		err := rows.Scan(&s.ID, &s.ProviderID, &s.Titre, &desc, &s.Categorie, &s.DureeMinutes, &s.Credits, &ville, &s.Actif, &createdAt)
+		if err == nil {
+			s.Description = desc.String
+			s.Ville = ville.String
+			s.CreatedAt = string(createdAt)
+			services = append(services, s)
+		}
+	}
+
+	if services == nil {
+		services = []Service{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(services)
+}
+
+func handleGetService(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var s Service
+	var desc, ville sql.NullString
+	var createdAt []byte
+
+	query := `SELECT id, provider_id, titre, description, categorie, duree_minutes, credits, ville, actif, created_at 
+	          FROM services WHERE id = ?`
+
+	err := db.QueryRow(query, id).Scan(&s.ID, &s.ProviderID, &s.Titre, &desc, &s.Categorie, &s.DureeMinutes, &s.Credits, &ville, &s.Actif, &createdAt)
+	
+	if err != nil {
+		http.Error(w, `{"error": "Service introuvable"}`, http.StatusNotFound)
+		return
+	}
+
+	s.Description = desc.String
+	s.Ville = ville.String
+	s.CreatedAt = string(createdAt)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s)
+}
+
+func handleUpdateService(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	providerID := r.Header.Get("X-User-ID")
+
+	var s Service
+	err := json.NewDecoder(r.Body).Decode(&s)
+	if err != nil {
+		http.Error(w, `{"error": "Données invalides"}`, http.StatusBadRequest)
+		return
+	}
+
+	query := `UPDATE services SET titre = ?, description = ?, categorie = ?, duree_minutes = ?, credits = ?, ville = ?, actif = ? 
+	          WHERE id = ? AND provider_id = ?`
+
+	result, err := db.Exec(query, s.Titre, s.Description, s.Categorie, s.DureeMinutes, s.Credits, s.Ville, s.Actif, id, providerID)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur serveur"}`, http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, `{"error": "Non autorisé ou service introuvable"}`, http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"message": "Service mis à jour avec succès"}`))
+}
+
+func handleDeleteService(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	providerID := r.Header.Get("X-User-ID")
+
+	query := "DELETE FROM services WHERE id = ? AND provider_id = ?"
+	result, err := db.Exec(query, id, providerID)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur serveur"}`, http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, `{"error": "Non autorisé ou service introuvable"}`, http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"message": "Service supprimé avec succès"}`))
+}
+
 // FONCTIONS UTILITAIRES
 
 func getSkillsForUser(userID string) []Skill {
@@ -242,4 +450,18 @@ func getSkillsForUser(userID string) []Skill {
 		skills = append(skills, s)
 	}
 	return skills
+}
+
+func isValidCategory(c string) bool {
+	categories := []string{
+		"Informatique", "Jardinage", "Bricolage", "Cuisine", "Musique", 
+		"Langues", "Sport", "Tutorat", "Déménagement", "Photographie", 
+		"Animalier", "Couture", "Autre",
+	}
+	for _, cat := range categories {
+		if c == cat {
+			return true
+		}
+	}
+	return false
 }
