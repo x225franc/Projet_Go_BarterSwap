@@ -44,6 +44,25 @@ type Service struct {
 	CreatedAt    string `json:"created_at"`
 }
 
+type Exchange struct {
+	ID          int    `json:"id"`
+	ServiceID   int    `json:"service_id"`
+	RequesterID int    `json:"requester_id"` 
+	OwnerID     int    `json:"owner_id"`     
+	Status      string `json:"status"`       
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type CreditTransaction struct {
+	ID         int    `json:"id"`
+	UserID     int    `json:"user_id"`
+	ExchangeID int    `json:"exchange_id"`
+	Montant    int    `json:"montant"` 
+	Type       string `json:"type"`    
+	CreatedAt  string `json:"created_at"`
+}
+
 // FONCTION PRINCIPALE
 
 func main() {
@@ -66,6 +85,15 @@ func main() {
 	mux.HandleFunc("GET /api/services/{id}", handleGetService)
 	mux.HandleFunc("PUT /api/services/{id}", handleUpdateService)
 	mux.HandleFunc("DELETE /api/services/{id}", handleDeleteService)
+
+	// Routes Echanges
+	mux.HandleFunc("POST /api/exchanges", handleCreateExchange)
+	mux.HandleFunc("GET /api/exchanges", handleGetExchanges)
+	mux.HandleFunc("GET /api/exchanges/{id}", handleGetExchangeByID)
+	mux.HandleFunc("PUT /api/exchanges/{id}/accept", handleAcceptExchange)
+	mux.HandleFunc("PUT /api/exchanges/{id}/reject", handleRejectExchange)
+	mux.HandleFunc("PUT /api/exchanges/{id}/complete", handleCompleteExchange)
+	mux.HandleFunc("PUT /api/exchanges/{id}/cancel", handleCancelExchange)
 
 	fmt.Println("Serveur démarré sur http://localhost:8080")
 	err := http.ListenAndServe(":8080", mux)
@@ -148,6 +176,42 @@ func createTables() {
 	if err != nil {
 		log.Fatal("Erreur création table services:", err)
 	}
+
+	// Table exchanges
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS exchanges (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			service_id INT NOT NULL,
+			requester_id INT NOT NULL,
+			owner_id INT NOT NULL,
+			status VARCHAR(50) NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			FOREIGN KEY (service_id) REFERENCES services(id),
+			FOREIGN KEY (requester_id) REFERENCES users(id),
+			FOREIGN KEY (owner_id) REFERENCES users(id)
+		)
+	`)
+	if err != nil {
+		log.Fatal("Erreur création table exchanges:", err)
+	}
+
+	// Table credit_transactions
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS credit_transactions (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			exchange_id INT NOT NULL,
+			montant INT NOT NULL,
+			type VARCHAR(50) NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id),
+			FOREIGN KEY (exchange_id) REFERENCES exchanges(id)
+		)
+	`)
+	if err != nil {
+		log.Fatal("Erreur création table credit_transactions:", err)
+	}
 }
 
 // HANDLERS HTTP UTILISATEURS
@@ -193,6 +257,7 @@ func handleGetUser(w http.ResponseWriter, r *http.Request) {
 	u.Bio = bio.String
 	u.Ville = ville.String
 	u.CreatedAt = string(createdAt)
+
 	u.Skills = getSkillsForUser(id)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -432,6 +497,283 @@ func handleDeleteService(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"message": "Service supprimé avec succès"}`))
+}
+
+// HANDLERS HTTP ECHANGES
+
+func handleCreateExchange(w http.ResponseWriter, r *http.Request) {
+	requesterID := r.Header.Get("X-User-ID")
+	if requesterID == "" {
+		http.Error(w, `{"error": "Authentification requise"}`, http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		ServiceID int `json:"service_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Données invalides"}`, http.StatusBadRequest)
+		return
+	}
+
+	var ownerID int
+	var serviceCredits int
+	err := db.QueryRow("SELECT provider_id, credits FROM services WHERE id = ? AND actif = true", req.ServiceID).Scan(&ownerID, &serviceCredits)
+	if err != nil {
+		http.Error(w, `{"error": "Service introuvable ou inactif"}`, http.StatusNotFound)
+		return
+	}
+
+	if fmt.Sprintf("%d", ownerID) == requesterID {
+		http.Error(w, `{"error": "Vous ne pouvez pas échanger un service avec vous-même"}`, http.StatusBadRequest)
+		return
+	}
+
+	var userCredits int
+	err = db.QueryRow("SELECT credit_balance FROM users WHERE id = ?", requesterID).Scan(&userCredits)
+	if err != nil || userCredits < serviceCredits {
+		http.Error(w, `{"error": "Crédits insuffisants pour lancer cet échange"}`, http.StatusBadRequest)
+		return
+	}
+
+	var activeExchanges int
+	db.QueryRow("SELECT COUNT(*) FROM exchanges WHERE service_id = ? AND status IN ('pending', 'accepted')", req.ServiceID).Scan(&activeExchanges)
+	if activeExchanges > 0 {
+		http.Error(w, `{"error": "Ce service est déjà en cours d'échange"}`, http.StatusConflict)
+		return
+	}
+
+	query := "INSERT INTO exchanges (service_id, requester_id, owner_id, status) VALUES (?, ?, ?, 'pending')"
+	res, err := db.Exec(query, req.ServiceID, requesterID, ownerID)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur création échange"}`, http.StatusInternalServerError)
+		return
+	}
+
+	id, _ := res.LastInsertId()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(fmt.Sprintf(`{"message": "Demande créée", "exchange_id": %d}`, id)))
+}
+
+func handleGetExchanges(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
+	status := r.URL.Query().Get("status")
+
+	query := "SELECT id, service_id, requester_id, owner_id, status, created_at, updated_at FROM exchanges WHERE (requester_id = ? OR owner_id = ?)"
+	args := []any{userID, userID}
+
+	if status != "" {
+		query += " AND status = ?"
+		args = append(args, status)
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur serveur"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var exchanges []Exchange = []Exchange{}
+	for rows.Next() {
+		var e Exchange
+		var ca, ua []byte
+		rows.Scan(&e.ID, &e.ServiceID, &e.RequesterID, &e.OwnerID, &e.Status, &ca, &ua)
+		e.CreatedAt = string(ca)
+		e.UpdatedAt = string(ua)
+		exchanges = append(exchanges, e)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(exchanges)
+}
+
+func handleGetExchangeByID(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	userID := r.Header.Get("X-User-ID")
+
+	var e Exchange
+	var ca, ua []byte
+	query := "SELECT id, service_id, requester_id, owner_id, status, created_at, updated_at FROM exchanges WHERE id = ? AND (requester_id = ? OR owner_id = ?)"
+	
+	err := db.QueryRow(query, id, userID, userID).Scan(&e.ID, &e.ServiceID, &e.RequesterID, &e.OwnerID, &e.Status, &ca, &ua)
+	if err != nil {
+		http.Error(w, `{"error": "Echange introuvable ou non autorisé"}`, http.StatusNotFound)
+		return
+	}
+
+	e.CreatedAt = string(ca)
+	e.UpdatedAt = string(ua)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(e)
+}
+
+func handleAcceptExchange(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ownerID := r.Header.Get("X-User-ID")
+
+	var e Exchange
+	var serviceCredits int
+	err := db.QueryRow("SELECT e.requester_id, e.status, s.credits FROM exchanges e JOIN services s ON e.service_id = s.id WHERE e.id = ? AND e.owner_id = ?", id, ownerID).Scan(&e.RequesterID, &e.Status, &serviceCredits)
+	
+	if err != nil || e.Status != "pending" {
+		http.Error(w, `{"error": "Impossible d'accepter cet échange"}`, http.StatusBadRequest)
+		return
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, `{"error": "Erreur serveur"}`, http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec("UPDATE users SET credit_balance = credit_balance - ? WHERE id = ? AND credit_balance >= ?", serviceCredits, e.RequesterID, serviceCredits)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur lors de la mise à jour des crédits"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, `{"error": "Le demandeur n'a plus assez de crédits"}`, http.StatusBadRequest)
+		return
+	}
+
+	_, err = tx.Exec("INSERT INTO credit_transactions (user_id, exchange_id, montant, type) VALUES (?, ?, ?, 'spend')", e.RequesterID, id, -serviceCredits)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur lors de l'enregistrement de la transaction"}`, http.StatusInternalServerError)
+		return
+	}
+
+	_, err = tx.Exec("UPDATE exchanges SET status = 'accepted' WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur lors de la mise à jour du statut"}`, http.StatusInternalServerError)
+		return
+	}
+
+	tx.Commit()
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"message": "Echange accepté, crédits bloqués"}`))
+}
+
+func handleRejectExchange(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ownerID := r.Header.Get("X-User-ID")
+
+	res, err := db.Exec("UPDATE exchanges SET status = 'rejected' WHERE id = ? AND owner_id = ? AND status = 'pending'", id, ownerID)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur serveur"}`, http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, `{"error": "Echange introuvable ou mauvais statut"}`, http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"message": "Echange refusé"}`))
+}
+
+func handleCompleteExchange(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	requesterID := r.Header.Get("X-User-ID")
+
+	var ownerID int
+	var serviceCredits int
+	err := db.QueryRow("SELECT e.owner_id, s.credits FROM exchanges e JOIN services s ON e.service_id = s.id WHERE e.id = ? AND e.requester_id = ? AND e.status = 'accepted'", id, requesterID).Scan(&ownerID, &serviceCredits)
+	
+	if err != nil {
+		http.Error(w, `{"error": "Echange introuvable ou non autorisé (seul le demandeur peut terminer l'échange)"}`, http.StatusBadRequest)
+		return
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, `{"error": "Erreur serveur"}`, http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("UPDATE users SET credit_balance = credit_balance + ? WHERE id = ?", serviceCredits, ownerID)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur lors du transfert de crédits"}`, http.StatusInternalServerError)
+		return
+	}
+
+	_, err = tx.Exec("INSERT INTO credit_transactions (user_id, exchange_id, montant, type) VALUES (?, ?, ?, 'earn')", ownerID, id, serviceCredits)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur trace de transaction"}`, http.StatusInternalServerError)
+		return
+	}
+
+	_, err = tx.Exec("UPDATE exchanges SET status = 'completed' WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur mise à jour du statut"}`, http.StatusInternalServerError)
+		return
+	}
+
+	tx.Commit()
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"message": "Echange terminé, crédits transférés"}`))
+}
+
+func handleCancelExchange(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	userID := r.Header.Get("X-User-ID")
+
+	var e Exchange
+	var serviceCredits int
+	err := db.QueryRow("SELECT e.requester_id, e.status, s.credits FROM exchanges e JOIN services s ON e.service_id = s.id WHERE e.id = ? AND (e.requester_id = ? OR e.owner_id = ?)", id, userID, userID).Scan(&e.RequesterID, &e.Status, &serviceCredits)
+	
+	if err != nil || (e.Status != "pending" && e.Status != "accepted") {
+		http.Error(w, `{"error": "Impossible d'annuler cet échange (déjà terminé ou introuvable)"}`, http.StatusBadRequest)
+		return
+	}
+
+	if e.Status == "accepted" {
+		tx, err := db.Begin()
+		if err != nil {
+			http.Error(w, `{"error": "Erreur serveur"}`, http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		_, err = tx.Exec("UPDATE users SET credit_balance = credit_balance + ? WHERE id = ?", serviceCredits, e.RequesterID)
+		if err != nil {
+			http.Error(w, `{"error": "Erreur lors du remboursement"}`, http.StatusInternalServerError)
+			return
+		}
+
+		_, err = tx.Exec("INSERT INTO credit_transactions (user_id, exchange_id, montant, type) VALUES (?, ?, ?, 'refund')", e.RequesterID, id, serviceCredits)
+		if err != nil {
+			http.Error(w, `{"error": "Erreur trace de transaction"}`, http.StatusInternalServerError)
+			return
+		}
+
+		_, err = tx.Exec("UPDATE exchanges SET status = 'cancelled' WHERE id = ?", id)
+		if err != nil {
+			http.Error(w, `{"error": "Erreur mise à jour statut"}`, http.StatusInternalServerError)
+			return
+		}
+
+		tx.Commit()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message": "Echange annulé et crédits remboursés au demandeur"}`))
+		return
+	}
+
+	_, err = db.Exec("UPDATE exchanges SET status = 'cancelled' WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur lors de l'annulation"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"message": "Demande annulée avec succès"}`))
 }
 
 // FONCTIONS UTILITAIRES
