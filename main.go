@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -63,6 +64,16 @@ type CreditTransaction struct {
 	CreatedAt  string `json:"created_at"`
 }
 
+type Review struct {
+	ID          int    `json:"id"`
+	ExchangeID  int    `json:"exchange_id"`
+	AuthorID    int    `json:"author_id"`
+	TargetID    int    `json:"target_id"`
+	Note        int    `json:"note"` 
+	Commentaire string `json:"commentaire,omitempty"`
+	CreatedAt   string `json:"created_at"`
+}
+
 // FONCTION PRINCIPALE
 
 func main() {
@@ -78,6 +89,7 @@ func main() {
 	mux.HandleFunc("PUT /api/users/{id}", handleUpdateUser)
 	mux.HandleFunc("GET /api/users/{id}/skills", handleGetSkills)
 	mux.HandleFunc("PUT /api/users/{id}/skills", handleUpdateSkills)
+	mux.HandleFunc("GET /api/users/{id}/reviews", handleGetUserReviews)
 
 	// Routes Services
 	mux.HandleFunc("POST /api/services", handleCreateService)
@@ -85,6 +97,7 @@ func main() {
 	mux.HandleFunc("GET /api/services/{id}", handleGetService)
 	mux.HandleFunc("PUT /api/services/{id}", handleUpdateService)
 	mux.HandleFunc("DELETE /api/services/{id}", handleDeleteService)
+	mux.HandleFunc("GET /api/services/{id}/reviews", handleGetServiceReviews)
 
 	// Routes Echanges
 	mux.HandleFunc("POST /api/exchanges", handleCreateExchange)
@@ -94,6 +107,7 @@ func main() {
 	mux.HandleFunc("PUT /api/exchanges/{id}/reject", handleRejectExchange)
 	mux.HandleFunc("PUT /api/exchanges/{id}/complete", handleCompleteExchange)
 	mux.HandleFunc("PUT /api/exchanges/{id}/cancel", handleCancelExchange)
+	mux.HandleFunc("POST /api/exchanges/{id}/review", handleCreateReview)
 
 	fmt.Println("Serveur démarré sur http://localhost:8080")
 	err := http.ListenAndServe(":8080", mux)
@@ -212,6 +226,26 @@ func createTables() {
 	if err != nil {
 		log.Fatal("Erreur création table credit_transactions:", err)
 	}
+
+	// Table reviews
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS reviews (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			exchange_id INT NOT NULL,
+			author_id INT NOT NULL,
+			target_id INT NOT NULL,
+			note INT NOT NULL CHECK(note >= 1 AND note <= 5),
+			commentaire TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (exchange_id) REFERENCES exchanges(id),
+			FOREIGN KEY (author_id) REFERENCES users(id),
+			FOREIGN KEY (target_id) REFERENCES users(id),
+			UNIQUE KEY unique_review (exchange_id, author_id)
+		)
+	`)
+	if err != nil {
+		log.Fatal("Erreur création table reviews:", err)
+	}
 }
 
 // HANDLERS HTTP UTILISATEURS
@@ -328,6 +362,32 @@ func handleUpdateSkills(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"message": "Compétences mises à jour"}`))
+}
+
+func handleGetUserReviews(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	query := "SELECT id, exchange_id, author_id, target_id, note, commentaire, created_at FROM reviews WHERE target_id = ?"
+	rows, err := db.Query(query, id)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur serveur"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var reviews []Review = []Review{}
+	for rows.Next() {
+		var rev Review
+		var comm sql.NullString
+		var ca []byte
+		rows.Scan(&rev.ID, &rev.ExchangeID, &rev.AuthorID, &rev.TargetID, &rev.Note, &comm, &ca)
+		rev.Commentaire = comm.String
+		rev.CreatedAt = string(ca)
+		reviews = append(reviews, rev)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(reviews)
 }
 
 // HANDLERS HTTP SERVICES
@@ -497,6 +557,37 @@ func handleDeleteService(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"message": "Service supprimé avec succès"}`))
+}
+
+func handleGetServiceReviews(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	query := `
+		SELECT r.id, r.exchange_id, r.author_id, r.target_id, r.note, r.commentaire, r.created_at 
+		FROM reviews r
+		JOIN exchanges e ON r.exchange_id = e.id
+		WHERE e.service_id = ? AND r.target_id = e.owner_id
+	`
+	rows, err := db.Query(query, id)
+	if err != nil {
+		http.Error(w, `{"error": "Erreur serveur"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var reviews []Review = []Review{}
+	for rows.Next() {
+		var rev Review
+		var comm sql.NullString
+		var ca []byte
+		rows.Scan(&rev.ID, &rev.ExchangeID, &rev.AuthorID, &rev.TargetID, &rev.Note, &comm, &ca)
+		rev.Commentaire = comm.String
+		rev.CreatedAt = string(ca)
+		reviews = append(reviews, rev)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(reviews)
 }
 
 // HANDLERS HTTP ECHANGES
@@ -774,6 +865,64 @@ func handleCancelExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"message": "Demande annulée avec succès"}`))
+}
+
+func handleCreateReview(w http.ResponseWriter, r *http.Request) {
+	exchangeID := r.PathValue("id")
+	authorIDStr := r.Header.Get("X-User-ID")
+	authorID, _ := strconv.Atoi(authorIDStr)
+
+	if authorIDStr == "" {
+		http.Error(w, `{"error": "Authentification requise"}`, http.StatusUnauthorized)
+		return
+	}
+
+	var rev Review
+	err := json.NewDecoder(r.Body).Decode(&rev)
+	if err != nil || rev.Note < 1 || rev.Note > 5 {
+		http.Error(w, `{"error": "Données invalides ou note hors limite (doit être entre 1 et 5)"}`, http.StatusBadRequest)
+		return
+	}
+
+	var reqID, ownerID int
+	var status string
+	err = db.QueryRow("SELECT requester_id, owner_id, status FROM exchanges WHERE id = ?", exchangeID).Scan(&reqID, &ownerID, &status)
+	if err != nil {
+		http.Error(w, `{"error": "Echange introuvable"}`, http.StatusNotFound)
+		return
+	}
+
+	if status != "completed" {
+		http.Error(w, `{"error": "Vous ne pouvez évaluer qu'un échange terminé"}`, http.StatusBadRequest)
+		return
+	}
+
+	if authorID != reqID && authorID != ownerID {
+		http.Error(w, `{"error": "Vous n'êtes pas impliqué dans cet échange"}`, http.StatusForbidden)
+		return
+	}
+
+	targetID := ownerID
+	if authorID == ownerID {
+		targetID = reqID
+	}
+
+	query := "INSERT INTO reviews (exchange_id, author_id, target_id, note, commentaire) VALUES (?, ?, ?, ?, ?)"
+	res, err := db.Exec(query, exchangeID, authorID, targetID, rev.Note, rev.Commentaire)
+	if err != nil {
+		http.Error(w, `{"error": "Vous avez déjà évalué cet échange ou erreur serveur"}`, http.StatusConflict)
+		return
+	}
+
+	newID, _ := res.LastInsertId()
+	rev.ID = int(newID)
+	rev.ExchangeID, _ = strconv.Atoi(exchangeID)
+	rev.AuthorID = authorID
+	rev.TargetID = targetID
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(rev)
 }
 
 // FONCTIONS UTILITAIRES
