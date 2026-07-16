@@ -1,0 +1,398 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "BarterSwap API",
+    "description": "API d'échange de compétences entre particuliers, basée sur un système de crédits-temps.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    { "url": "/", "description": "Serveur courant" }
+  ],
+  "tags": [
+    { "name": "Utilisateurs" },
+    { "name": "Services" },
+    { "name": "Echanges" },
+    { "name": "Avis" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "UserIdAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-User-ID",
+        "description": "Identifiant de l'utilisateur effectuant l'action (pas de token, cf. README)."
+      }
+    },
+    "schemas": {
+      "Skill": {
+        "type": "object",
+        "properties": {
+          "nom": { "type": "string", "example": "Jardinage" },
+          "niveau": { "type": "string", "enum": ["débutant", "intermédiaire", "expert"] }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "pseudo": { "type": "string" },
+          "bio": { "type": "string" },
+          "ville": { "type": "string" },
+          "skills": { "type": "array", "items": { "$ref": "#/components/schemas/Skill" } },
+          "credit_balance": { "type": "integer" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Service": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "provider_id": { "type": "integer" },
+          "titre": { "type": "string" },
+          "description": { "type": "string" },
+          "categorie": {
+            "type": "string",
+            "enum": ["Informatique", "Jardinage", "Bricolage", "Cuisine", "Musique", "Langues", "Sport", "Tutorat", "Déménagement", "Photographie", "Animalier", "Couture", "Autre"]
+          },
+          "duree_minutes": { "type": "integer" },
+          "credits": { "type": "integer" },
+          "ville": { "type": "string" },
+          "actif": { "type": "boolean" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Exchange": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "service_id": { "type": "integer" },
+          "requester_id": { "type": "integer" },
+          "owner_id": { "type": "integer" },
+          "status": { "type": "string", "enum": ["pending", "accepted", "rejected", "completed", "cancelled"] },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Review": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "exchange_id": { "type": "integer" },
+          "author_id": { "type": "integer" },
+          "target_id": { "type": "integer" },
+          "note": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "commentaire": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": { "message": { "type": "string" } }
+      },
+      "Error": {
+        "type": "object",
+        "properties": { "error": { "type": "string" } }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Requête invalide ou règle métier non respectée",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "Unauthorized": {
+        "description": "Authentification requise (header X-User-ID manquant ou incorrect)",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "Forbidden": {
+        "description": "Action non autorisée sur cette ressource",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "NotFound": {
+        "description": "Ressource introuvable",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "Conflict": {
+        "description": "Conflit (ex : service déjà réservé, avis déjà déposé)",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    }
+  },
+  "paths": {
+    "/api/users": {
+      "post": {
+        "tags": ["Utilisateurs"],
+        "summary": "Créer un compte (10 crédits de bienvenue attribués automatiquement)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } }
+        },
+        "responses": {
+          "201": { "description": "Compte créé", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/users/{id}": {
+      "get": {
+        "tags": ["Utilisateurs"],
+        "summary": "Profil public d'un utilisateur",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "Profil utilisateur", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "put": {
+        "tags": ["Utilisateurs"],
+        "summary": "Modifier son propre profil (bio, ville)",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } }
+        },
+        "responses": {
+          "200": { "description": "Profil mis à jour", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/users/{id}/skills": {
+      "get": {
+        "tags": ["Utilisateurs"],
+        "summary": "Compétences d'un utilisateur",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": {
+            "description": "Liste des compétences",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Skill" } } } }
+          }
+        }
+      },
+      "put": {
+        "tags": ["Utilisateurs"],
+        "summary": "Définir ses compétences (écrase les précédentes)",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Skill" } } } }
+        },
+        "responses": {
+          "200": { "description": "Compétences mises à jour", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/users/{id}/reviews": {
+      "get": {
+        "tags": ["Avis"],
+        "summary": "Avis reçus par un utilisateur",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": {
+            "description": "Liste des avis",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Review" } } } }
+          }
+        }
+      }
+    },
+    "/api/services": {
+      "post": {
+        "tags": ["Services"],
+        "summary": "Créer une annonce de service",
+        "security": [{ "UserIdAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Service" } } }
+        },
+        "responses": {
+          "201": { "description": "Service créé", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Service" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "get": {
+        "tags": ["Services"],
+        "summary": "Liste des services, avec filtres optionnels",
+        "parameters": [
+          { "name": "categorie", "in": "query", "schema": { "type": "string" }, "description": "Filtrer par catégorie" },
+          { "name": "ville", "in": "query", "schema": { "type": "string" }, "description": "Filtrer par ville" },
+          { "name": "search", "in": "query", "schema": { "type": "string" }, "description": "Recherche textuelle (titre/description)" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Liste des services",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Service" } } } }
+          }
+        }
+      }
+    },
+    "/api/services/{id}": {
+      "get": {
+        "tags": ["Services"],
+        "summary": "Détail d'un service",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "Service", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Service" } } } },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "put": {
+        "tags": ["Services"],
+        "summary": "Modifier son annonce",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Service" } } }
+        },
+        "responses": {
+          "200": { "description": "Service mis à jour", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "delete": {
+        "tags": ["Services"],
+        "summary": "Supprimer son annonce",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "Service supprimé", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/services/{id}/reviews": {
+      "get": {
+        "tags": ["Avis"],
+        "summary": "Avis sur un service",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": {
+            "description": "Liste des avis",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Review" } } } }
+          }
+        }
+      }
+    },
+    "/api/exchanges": {
+      "post": {
+        "tags": ["Echanges"],
+        "summary": "Créer une demande d'échange",
+        "security": [{ "UserIdAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "properties": { "service_id": { "type": "integer" } } }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Demande créée", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      },
+      "get": {
+        "tags": ["Echanges"],
+        "summary": "Liste des échanges de l'utilisateur (envoyés + reçus)",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["pending", "accepted", "rejected", "completed", "cancelled"] } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Liste des échanges",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Exchange" } } } }
+          }
+        }
+      }
+    },
+    "/api/exchanges/{id}": {
+      "get": {
+        "tags": ["Echanges"],
+        "summary": "Détail d'un échange",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "Echange", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Exchange" } } } },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/exchanges/{id}/accept": {
+      "put": {
+        "tags": ["Echanges"],
+        "summary": "Accepter une demande (bloque les crédits du demandeur)",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "Echange accepté", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/exchanges/{id}/reject": {
+      "put": {
+        "tags": ["Echanges"],
+        "summary": "Refuser une demande",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "Echange refusé", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/exchanges/{id}/complete": {
+      "put": {
+        "tags": ["Echanges"],
+        "summary": "Marquer comme terminé (transfère les crédits à l'offreur)",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "Echange terminé", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/exchanges/{id}/cancel": {
+      "put": {
+        "tags": ["Echanges"],
+        "summary": "Annuler (demandeur ou offreur ; rembourse les crédits bloqués si nécessaire)",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "Echange annulé", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/exchanges/{id}/review": {
+      "post": {
+        "tags": ["Avis"],
+        "summary": "Donner un avis sur un échange terminé",
+        "security": [{ "UserIdAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Review" } } }
+        },
+        "responses": {
+          "201": { "description": "Avis créé", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Review" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    }
+  }
+}
