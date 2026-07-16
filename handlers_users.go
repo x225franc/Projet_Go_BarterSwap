@@ -2,7 +2,6 @@ package main
 
 import "net/http"
 
-
 func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var u User
 	if err := decodeJSON(r, &u); err != nil {
@@ -89,4 +88,15 @@ func handleGetUserReviews(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, reviews)
+}
+
+func handleGetUserStats(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	stats, err := getUserStats(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }

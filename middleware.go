@@ -8,7 +8,6 @@ import (
 
 type middleware func(http.Handler) http.Handler
 
-
 func withMiddlewares(h http.Handler, mws ...middleware) http.Handler {
 	for i := len(mws) - 1; i >= 0; i-- {
 		h = mws[i](h)

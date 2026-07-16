@@ -1,6 +1,5 @@
 package main
 
-
 type User struct {
 	ID            int     `json:"id"`
 	Pseudo        string  `json:"pseudo"`

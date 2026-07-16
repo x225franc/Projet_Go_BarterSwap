@@ -1,8 +1,8 @@
 # BarterSwap — API d'échange de compétences
 
-## Installation
+API REST en Go (stdlib uniquement) pour échanger des services entre particuliers via un système de crédits-temps : chaque heure de service rendue donne droit à une heure de service reçue.
 
-### Avec Docker
+## Installation
 
 ```bash
 git clone https://github.com/x225franc/Projet_Go_BarterSwap.git
@@ -71,9 +71,14 @@ curl -X POST http://localhost:8080/api/users \
   -d '{"pseudo": "bob", "ville": "Lyon"}'
 ```
 
-### Publier un service (bob propose 1h de jardinage pour 3 crédits)
+### Déclarer une compétence puis publier un service
 
 ```bash
+curl -X PUT http://localhost:8080/api/users/2/skills \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: 2" \
+  -d '[{"nom": "Jardinage", "niveau": "expert"}]'
+
 curl -X POST http://localhost:8080/api/services \
   -H "Content-Type: application/json" \
   -H "X-User-ID: 2" \
@@ -119,4 +124,4 @@ curl http://localhost:8080/api/users/2/stats
 go test -v -cover ./...
 ```
 
-Les tests unitaires (validations, mapping d'erreurs) ne nécessitent pas de base de données. Les tests d'API (`httptest`) exercent le cycle de vie complet d'un échange et nécessitent une instance MySQL disponible (`docker-compose up -d db` avant de lancer `go test`).
+Une instance MySQL doit être joignable pour lancer les tests (`docker compose up -d db` avant de lancer la commande ci-dessus). Par défaut ils se connectent à `localhost:3306` (variables `DB_HOST`/`DB_PORT` surchargeables). Les tables sont vidées avant chaque test pour rester indépendants les uns des autres.

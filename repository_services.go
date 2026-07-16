@@ -5,7 +5,6 @@ import (
 	"database/sql"
 )
 
-
 func dbInsertService(ctx context.Context, providerID string, s Service) (int, error) {
 	query := `INSERT INTO services (provider_id, titre, description, categorie, duree_minutes, credits, ville, actif)
 	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`

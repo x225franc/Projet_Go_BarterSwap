@@ -5,7 +5,6 @@ import (
 	"database/sql"
 )
 
-
 func dbInsertUser(ctx context.Context, u User) (int, error) {
 	result, err := db.ExecContext(ctx,
 		"INSERT INTO users (pseudo, bio, ville, credit_balance) VALUES (?, ?, ?, 10)",

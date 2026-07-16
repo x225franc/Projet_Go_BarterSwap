@@ -23,7 +23,6 @@ func decodeJSON(r *http.Request, dst any) error {
 	return nil
 }
 
-
 func isOwner(r *http.Request, id string) bool {
 	return r.Header.Get("X-User-ID") == id
 }

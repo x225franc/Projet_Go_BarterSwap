@@ -3,10 +3,10 @@ package main
 import (
 	"errors"
 	"net/http"
+
+	"github.com/go-sql-driver/mysql"
 )
 
-// Sentinelles d'erreurs métier. Le code appelant les compare avec errors.Is,
-// jamais en inspectant un message texte.
 var (
 	ErrNotFound            = errors.New("ressource introuvable")
 	ErrInvalidInput        = errors.New("donnees invalides")
@@ -16,7 +16,6 @@ var (
 	ErrInsufficientCredits = errors.New("credits insuffisants")
 	ErrInternal            = errors.New("erreur interne")
 )
-
 
 type domainError struct {
 	sentinel error
@@ -30,7 +29,6 @@ func newError(sentinel error, message string) error {
 	return &domainError{sentinel: sentinel, message: message}
 }
 
-// statusForError traduit une erreur métier en code HTTP + message à afficher.
 func statusForError(err error) (int, string) {
 	message := "Erreur serveur"
 	var de *domainError
@@ -52,4 +50,12 @@ func statusForError(err error) (int, string) {
 	default:
 		return http.StatusInternalServerError, message
 	}
+}
+
+func isDuplicateEntry(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == 1062
+	}
+	return false
 }

@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"strconv"
 )
-
 
 func createExchange(ctx context.Context, requesterID string, serviceID int) (int, error) {
 	ownerID, serviceCredits, err := dbFindActiveServiceForExchange(ctx, serviceID)
@@ -12,7 +10,7 @@ func createExchange(ctx context.Context, requesterID string, serviceID int) (int
 		return 0, newError(ErrNotFound, "Service introuvable ou inactif")
 	}
 
-	if strconv.Itoa(ownerID) == requesterID {
+	if isSelfExchange(ownerID, requesterID) {
 		return 0, newError(ErrInvalidInput, "Vous ne pouvez pas échanger un service avec vous-même")
 	}
 
@@ -77,7 +75,7 @@ func completeExchange(ctx context.Context, id, requesterID string) error {
 
 func cancelExchange(ctx context.Context, id, userID string) (string, error) {
 	requesterID, serviceCredits, status, err := dbFindExchangeForCancel(ctx, id, userID)
-	if err != nil || (status != "pending" && status != "accepted") {
+	if err != nil || !isActiveExchangeStatus(status) {
 		return "", newError(ErrInvalidInput, "Impossible d'annuler cet échange (déjà terminé ou introuvable)")
 	}
 

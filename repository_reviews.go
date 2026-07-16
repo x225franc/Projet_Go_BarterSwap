@@ -5,7 +5,6 @@ import (
 	"database/sql"
 )
 
-
 func dbScanReviews(ctx context.Context, query string, args ...any) ([]Review, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {

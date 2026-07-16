@@ -2,7 +2,6 @@ package main
 
 import "net/http"
 
-
 func handleCreateExchange(w http.ResponseWriter, r *http.Request) {
 	requesterID := r.Header.Get("X-User-ID")
 	if requesterID == "" {

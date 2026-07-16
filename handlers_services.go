@@ -2,7 +2,6 @@ package main
 
 import "net/http"
 
-
 func handleCreateService(w http.ResponseWriter, r *http.Request) {
 	providerID := r.Header.Get("X-User-ID")
 	if providerID == "" {

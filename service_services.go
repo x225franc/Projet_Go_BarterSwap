@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
 )
-
 
 var validCategories = []string{
 	"Informatique", "Jardinage", "Bricolage", "Cuisine", "Musique",
@@ -30,12 +30,21 @@ func createService(ctx context.Context, providerID string, s Service) (Service, 
 		return Service{}, newError(ErrInvalidInput, "Catégorie non reconnue")
 	}
 
+	skills, err := dbFindSkillsByUserID(ctx, providerID)
+	if err != nil {
+		return Service{}, newError(ErrInternal, "Erreur serveur")
+	}
+	if !userHasSkill(skills, s.Categorie) {
+		return Service{}, newError(ErrInvalidInput, "Vous ne possédez pas la compétence associée à cette catégorie: "+s.Categorie)
+	}
+
 	s.Actif = true
 	id, err := dbInsertService(ctx, providerID, s)
 	if err != nil {
 		return Service{}, newError(ErrInternal, "Erreur lors de la création du service")
 	}
 	s.ID = id
+	s.ProviderID, _ = strconv.Atoi(providerID)
 
 	return s, nil
 }

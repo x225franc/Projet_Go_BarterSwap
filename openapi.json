@@ -85,6 +85,19 @@
           "created_at": { "type": "string", "format": "date-time" }
         }
       },
+      "UserStats": {
+        "type": "object",
+        "properties": {
+          "user_id": { "type": "integer" },
+          "services_actifs": { "type": "integer" },
+          "echanges_completes": { "type": "integer" },
+          "credit_balance": { "type": "integer" },
+          "note_moyenne": { "type": "number", "format": "float" },
+          "nb_avis": { "type": "integer" },
+          "total_gagne": { "type": "integer" },
+          "total_depense": { "type": "integer" }
+        }
+      },
       "Message": {
         "type": "object",
         "properties": { "message": { "type": "string" } }
@@ -196,6 +209,17 @@
             "description": "Liste des avis",
             "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Review" } } } }
           }
+        }
+      }
+    },
+    "/api/users/{id}/stats": {
+      "get": {
+        "tags": ["Utilisateurs"],
+        "summary": "Statistiques (tableau de bord) d'un utilisateur",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "Statistiques utilisateur", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserStats" } } } },
+          "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
     },

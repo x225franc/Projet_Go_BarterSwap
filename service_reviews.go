@@ -5,11 +5,10 @@ import (
 	"strconv"
 )
 
-
 func createReview(ctx context.Context, exchangeIDStr, authorIDStr string, rev Review) (Review, error) {
 	authorID, _ := strconv.Atoi(authorIDStr)
 
-	if rev.Note < 1 || rev.Note > 5 {
+	if !isValidNote(rev.Note) {
 		return Review{}, newError(ErrInvalidInput, "Données invalides ou note hors limite (doit être entre 1 et 5)")
 	}
 
@@ -31,7 +30,10 @@ func createReview(ctx context.Context, exchangeIDStr, authorIDStr string, rev Re
 
 	id, err := dbInsertReview(ctx, exchangeIDStr, authorID, targetID, rev)
 	if err != nil {
-		return Review{}, newError(ErrConflict, "Vous avez déjà évalué cet échange ou erreur serveur")
+		if isDuplicateEntry(err) {
+			return Review{}, newError(ErrConflict, "Vous avez déjà évalué cet échange")
+		}
+		return Review{}, newError(ErrInternal, "Erreur serveur")
 	}
 
 	rev.ID = id

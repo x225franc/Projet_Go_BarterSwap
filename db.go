@@ -12,13 +12,21 @@ import (
 
 var db *sql.DB
 
-func connectToDB() {
-	host := os.Getenv("DB_HOST")
-	if host == "" {
-		host = "localhost"
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
+	return def
+}
 
-	dsn := fmt.Sprintf("barteruser:root@tcp(%s:3306)/barterswap_db", host)
+func connectToDB() {
+	host := envOrDefault("DB_HOST", "localhost")
+	port := envOrDefault("DB_PORT", "3306")
+	user := envOrDefault("DB_USER", "barteruser")
+	password := envOrDefault("DB_PASSWORD", "root")
+	name := envOrDefault("DB_NAME", "barterswap_db")
+
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true", user, password, host, port, name)
 
 	var err error
 	db, err = sql.Open("mysql", dsn)
@@ -26,13 +34,15 @@ func connectToDB() {
 		log.Fatal("Impossible d'ouvrir la base de données:", err)
 	}
 
-	time.Sleep(3 * time.Second)
-
-	err = db.Ping()
-	if err != nil {
-		log.Fatal("La base de données ne répond pas:", err)
+	var lastErr error
+	for i := 0; i < 15; i++ {
+		if lastErr = db.Ping(); lastErr == nil {
+			fmt.Println("Connecté à MySQL avec succès !")
+			return
+		}
+		time.Sleep(2 * time.Second)
 	}
-	fmt.Println("Connecté à MySQL avec succès !")
+	log.Fatal("La base de données ne répond pas:", lastErr)
 }
 
 func createTables() {

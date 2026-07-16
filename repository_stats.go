@@ -2,7 +2,6 @@ package main
 
 import "context"
 
-
 func dbCountActiveServicesForProvider(ctx context.Context, userID string) (int, error) {
 	var count int
 	err := db.QueryRowContext(ctx,

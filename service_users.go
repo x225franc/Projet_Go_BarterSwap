@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
 )
-
 
 func createUser(ctx context.Context, u User) (User, error) {
 	if u.Pseudo == "" {
@@ -14,12 +14,18 @@ func createUser(ctx context.Context, u User) (User, error) {
 
 	id, err := dbInsertUser(ctx, u)
 	if err != nil {
-		return User{}, newError(ErrInternal, "Erreur serveur ou pseudo déjà pris")
+		if isDuplicateEntry(err) {
+			return User{}, newError(ErrConflict, "Ce pseudo est déjà pris")
+		}
+		return User{}, newError(ErrInternal, "Erreur serveur")
 	}
 
-	u.ID = id
-	u.CreditBalance = 10
-	return u, nil
+	created, err := dbFindUserByID(ctx, strconv.Itoa(id))
+	if err != nil {
+		return User{}, newError(ErrInternal, "Erreur serveur")
+	}
+	created.Skills = []Skill{}
+	return created, nil
 }
 
 func getUserProfile(ctx context.Context, id string) (User, error) {

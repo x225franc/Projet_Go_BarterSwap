@@ -2,7 +2,6 @@ package main
 
 import "context"
 
-
 func dbFindActiveServiceForExchange(ctx context.Context, serviceID int) (ownerID, credits int, err error) {
 	err = db.QueryRowContext(ctx, "SELECT provider_id, credits FROM services WHERE id = ? AND actif = true", serviceID).
 		Scan(&ownerID, &credits)
